@@ -1,0 +1,43 @@
+{
+  "title": "Tago",
+  "config": {
+    "flow_title": "{name} ({model})",
+    "step": {
+      "user": {
+        "title": "Add New Tago Device",
+        "data": {
+          "netkey": "Authentication PIN",
+          "hostname": "Host"
+        },
+        "data_description": {
+          "netkey": "The code is provided by TAGO controller app at. Leave blank if the device is not secured.",
+          "hostname": "The hostname or IP address of the Tago device."
+        }
+      },
+      "zeroconf_confirm": {
+        "description": "Do you want to add {model} {name} with serial number `{serial_number}` to Home Assistant?",
+        "title": "Discovered Tago Device",
+        "data": {
+          "netkey": "Authentication PIN"
+        },
+        "data_description": {
+          "netkey": "The code is provided by TAGO controller app at. Leave blank if the device is not secured."
+        }
+      }
+    },
+    "error": {
+      "already_in_progress": "This device is already in the process of being added.",
+      "already_configured": "This device has already been configured.",
+      "cannot_connect": "Cannot connect to device.",
+      "invalid_auth": "Device authentication failed.",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_in_progress": "This device is already in the process of being added.",
+      "already_configured": "This device has already been configured.",
+      "cannot_connect": "Cannot connect to device.",
+      "invalid_auth": "Device authentication failed.",
+      "unknown": "Unexpected error"
+    }
+  }
+}
