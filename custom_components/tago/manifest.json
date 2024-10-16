@@ -1,11 +1,11 @@
 {
   "domain": "tago",
   "name": "Tago",
-  "version": "1.0.1",
+  "version": "1.3",
   "config_flow": true,
   "documentation": "https://www.home-assistant.io/integrations/tago",
-  "requirements": ["websockets==13.0.1", "PyCryptodome==3.19.0"],
-  "zeroconf": ["_tagonet._tcp.local."],
+  "requirements": ["websockets==13.1", "PyCryptodome==3.19.0"],
+  "zeroconf": ["_tagocontroller._tcp.local."],
   "homekit": {},
   "codeowners": [""],
   "iot_class": "local_push"

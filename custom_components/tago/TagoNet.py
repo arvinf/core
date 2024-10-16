@@ -1,4 +1,7 @@
 from __future__ import annotations
+from typing import Callable, Dict, List, Optional, Tuple, Union, Coroutine, Any
+import random
+import string
 
 import asyncio
 from collections.abc import Callable
@@ -6,7 +9,8 @@ import json
 import logging
 import math
 
-import websockets
+import ssl
+from websockets.asyncio.client import connect as wsconnect
 
 from homeassistant.components.fan import FanEntity, FanEntityFeature
 from homeassistant.components.light import (
@@ -21,98 +25,12 @@ from homeassistant.util.percentage import (
     ranged_value_to_percentage,
 )
 
+import tempfile
+
 _LOGGER = logging.getLogger(__name__)
 
-class TagoConnection:
-    def __init__(self, hostname: str, network_key: str):
-        self._host = hostname
-        self._netkey = network_key
-        self._connect_attempt = 0
 
-        self._ws = None
-        self._enumerated = False
-        self._task = None
-        self._running = False
-
-        self.devices = []
-
-    async def connect(self, timeout: float = None) -> None:
-        if not self._task:
-            self._task = asyncio.create_task(self.connection_task())
-
-        ## If timeout is set, block until the device is enumerated or we've failed to connect
-        if timeout is None:
-            return
-
-        async with asyncio.timeout(timeout):
-            while not self._enumerated:
-                await asyncio.sleep(0.5)
-
-    async def disconnect(self) -> None:
-        self._running = False
-        if self._ws:
-            await self._ws.close()
-
-        try:
-            async with asyncio.timeout(2):
-                while self.is_connected:
-                    await asyncio.sleep(0.5)
-        except TimeoutError:
-            self._task.cancel()
-        self._task = None
-
-    def is_connected(self) -> bool:
-        return self._ws is not None
-
-    async def send_message(self, data: dict) -> None:
-        payload = json.dumps(data)
-        _LOGGER.debug(f"=== send_message {payload}")
-        self._ws.send(payload)
-
-    async def list_devices(self) -> None:
-        await self.send_message(msg=self.MSG_GET_DEVICES)
-
-    async def connection_task(self) -> None:
-        self._connect_attempt = 0
-        uri = f"ws://{self._host}/api/v1/ws"
-        self._running = True
-        while self._running:
-            _LOGGER.debug(f"connecting to {self._host}")
-            try:
-                async with websockets.connect(
-                    uri=uri, ping_timeout=1, ping_interval=3
-                ) as websocket:
-                    self._ws = websocket
-                    self._connect_attempt = 0
-                    _LOGGER.info(f"connected to {self._host}")
-                    try:
-                        if not self._enumerated:
-                            await self.list_devices()
-
-                        for message in self._ws:
-                            msg = json.loads(message)
-                            if msg['msg'] == self.MSG_GET_DEVICES:
-                                ## handle deviecs
-                                pass
-                            else:
-                                for device in self.devices:
-                                    device.handle_message(msg)
-
-                    except Exception:
-                        self._ws = None
-                        self.updated()
-                        # _LOGGER.info("==== EXCEPT")
-                        # _LOGGER.exception(e)
-            except Exception:
-                self._ws = None
-                self._connect_attempt = self._connect_attempt + 1
-                self.updated()
-                # _LOGGER.exception(e)
-            ## small delay between successive attempts to connect
-            if self._running:
-                await asyncio.sleep(0.5)
-
-class TagoEntity:
+class TagoEntityHA:
     EVT_STATE_CHANGED = "state_changed"
     EVT_CONFIG_CHANGED = "config_changed"
     EVT_KEYPRESS = "key_press"
@@ -120,7 +38,7 @@ class TagoEntity:
 
     MSG_GET_DEVICES = "get_devices"
     MSG_SET_CONFIG = "set_config"
-    MSG_GET_STATE  = "get_state"
+    MSG_GET_STATE = "get_state"
     MSG_TURN_ON = "turn_on"
     MSG_TURN_OFF = "turn_off"
     MSG_TOGGLE = "toggle"
@@ -150,7 +68,7 @@ class TagoEntity:
 
     @property
     def type(self) -> str:
-        ## TODO -- extrapolate from channel type
+        # TODO -- extrapolate from channel type
         p = self._uid.split(":")
         if len(p) > 2:
             return p[1]
@@ -194,7 +112,8 @@ class TagoEntity:
 
         return False
 
-class TagoBridge(TagoEntity):
+
+class TagoBridge(TagoEntityHA):
     def __init__(self, data: dict[str, str], device: TagoDevice):
         super().__init__(data, device)
         self._message_handler = None
@@ -210,7 +129,8 @@ class TagoBridge(TagoEntity):
 
         self._message_handler(self, entity_id=entity_id, message=message)
 
-class TagoLightHA(TagoEntity, LightEntity):
+
+class TagoLightHA(TagoEntityHA, LightEntity):
     LIGHT_ONOFF = "light_onoff"
     LIGHT_MONO = "light"
     LIGHT_RGB = "light_rgb"
@@ -218,7 +138,8 @@ class TagoLightHA(TagoEntity, LightEntity):
     LIGHT_RGB_CCT = "light_rgbww"
     LIGHT_CCT = "light_ww"
 
-    types = [LIGHT_ONOFF, LIGHT_MONO, LIGHT_RGB, LIGHT_RGBW, LIGHT_RGB_CCT, LIGHT_CCT]
+    types = [LIGHT_ONOFF, LIGHT_MONO, LIGHT_RGB,
+             LIGHT_RGBW, LIGHT_RGB_CCT, LIGHT_CCT]
 
     STATE_ON = "on"
     STATE_OFF = "off"
@@ -229,7 +150,7 @@ class TagoLightHA(TagoEntity, LightEntity):
         self._type = type
         self._id = data.get("id")
         self._state = data.get("state", self.STATE_OFF)
-        ## TODO default intensities based on type
+        # TODO default intensities based on type
         self._intensity = data.get("intensity", [0])
 
     @property
@@ -269,13 +190,14 @@ class TagoLightHA(TagoEntity, LightEntity):
         else:
             transition_time = 0.5
 
-        ## TODO handle multicoloured lights
+        # TODO handle multicoloured lights
         data = {
             "intensity": [brightness],
         }
 
         if transition_time is not None:
-            data["rate"] = int((TagoEntity.RANGE_MAX * 6) / (int(transition_time * 1000)))
+            data["rate"] = int((TagoEntityHA.RANGE_MAX * 6) /
+                               (int(transition_time * 1000)))
 
         await self.send_message(
             msg=self.MSG_FADE_TO, data=data
@@ -288,13 +210,13 @@ class TagoLightHA(TagoEntity, LightEntity):
     def convert_intensity_to_device(
         intensity: float, srclimit: float = 255
     ) -> int:
-        return int(round((intensity * TagoEntity.RANGE_MAX) / srclimit, 0))
+        return int(round((intensity * TagoEntityHA.RANGE_MAX) / srclimit, 0))
 
     @staticmethod
     def convert_intensity_from_device(
         intensity: float, srclimit: float = 255
     ) -> int:
-        return int(round((intensity * srclimit) / TagoEntity.RANGE_MAX, 0))
+        return int(round((intensity * srclimit) / TagoEntityHA.RANGE_MAX, 0))
 
     def handle_message(self, type: str, data: dict[str, str]) -> bool:
         super().handle_message(type=type, data=data)
@@ -310,7 +232,8 @@ class TagoLightHA(TagoEntity, LightEntity):
 
         return False
 
-class TagoFanHA(TagoEntity, FanEntity):
+
+class TagoFanHA(TagoEntityHA, FanEntity):
     FAN_ONOFF = "fan_onoff"
     FAN_ADJUSTABLE = "fan"
 
@@ -319,7 +242,7 @@ class TagoFanHA(TagoEntity, FanEntity):
     STATE_ON = "on"
     STATE_OFF = "off"
 
-    SPEED_RANGE = (0, TagoEntity.RANGE_MAX)
+    SPEED_RANGE = (0, TagoEntityHA.RANGE_MAX)
 
     def __init__(self, type: str, data: dict, device: TagoDevice):
         super().__init__(data, device)
@@ -360,7 +283,8 @@ class TagoFanHA(TagoEntity, FanEntity):
             await self.async_turn_off()
             return
 
-        level = math.ceil(percentage_to_ranged_value(self.SPEED_RANGE, percentage))
+        level = math.ceil(percentage_to_ranged_value(
+            self.SPEED_RANGE, percentage))
         await self.send_message(
             msg=self.MSG_FADE_TO, data={"intensity": [level]}
         )
@@ -374,7 +298,7 @@ class TagoFanHA(TagoEntity, FanEntity):
 
         if type == self.EVT_CONFIG_CHANGED:
             self._name = data.get("name", self._name)
-            ## TODO -- how to handle type change from fan to light??
+            # TODO -- how to handle type change from fan to light??
             self._type = data.get("type", self._type)
             return True
 
@@ -414,8 +338,176 @@ class TagoKeypad(TagoBridge):
             }
         )
 
+
+class TagoWebsocketClient:
+    MSG_EVT = 'msg'
+    CONNECTION_EVT = 'connection'
+
+    def __init__(self, uri: str, ca: str, pin: str):
+        self._uri = uri
+        self._ca = ca
+        self._pin = pin
+        self._ws = None
+        self._task = None
+        self._running: bool = False
+        self._handlers: dict = {
+            self.MSG_EVT: list(), self.CONNECTION_EVT: list()}
+        self._connected_flag = asyncio.Event()
+        self._disconnected_flag = asyncio.Event()
+
+    def subscribe(self, _type: str, cb: Callable) -> None:
+        self._handlers[_type].append(cb)
+
+    def unsubscribe(self, _type: str, cb: Callable) -> None:
+        if cb in self._handlers[_type]:
+            self._handlers[_type].remove(cb)
+
+    def _notify(self, _type: str, *args, **kwargs) -> None:
+        for cb in self._handlers[_type]:
+            cb(*args, **kwargs)
+
+    def set_ca(self, _ca: str) -> None:
+        self.ca = _ca
+
+    async def connect(self, timeout: float = 3) -> None:
+        if not self._task:
+            self._task = asyncio.create_task(self.connection_task())
+        elif self._ws:
+            await self._ws.close()
+        async with asyncio.timeout(timeout):
+            await self._connected_flag.wait()
+
+    async def disconnect(self, timeout: float = 3) -> None:
+        self._running = False
+        if self._ws:
+            await self._ws.close()
+
+        try:
+            async with asyncio.timeout(timeout):
+                await self._disconnected_flag.wait()
+
+        except TimeoutError:
+            self._task.cancel()
+        finally:
+            self._task = None
+
+    def is_connected(self) -> bool:
+        return self._connected_flag.is_set()
+
+    @staticmethod
+    def create_random_str(n: int = 6) -> str:
+        return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(n))
+
+    async def send_message(self, data: dict, responseTimeout: float = None) -> None | dict:
+        resp: dict = None
+        flag = asyncio.Event()
+
+        if responseTimeout:
+            ref = self.create_random_str()
+            data['ref'] = ref
+
+            def check_response(msg: dict):
+                nonlocal resp
+                if msg.get('ref') == ref:
+                    resp = msg
+                    flag.set()
+
+            self.subscribe(self.MSG_EVT, check_response)
+
+        try:
+            if self._pin:
+                data['pin'] = self._pin
+            payload = json.dumps(data)
+            _LOGGER.debug(f"=== send_message {payload}")
+            await self._ws.send(payload)
+            if responseTimeout:
+                async with asyncio.timeout(responseTimeout):
+                    await flag.wait()
+                    return resp
+        finally:
+            self.unsubscribe(self.MSG_EVT, check_response)
+
+    async def connection_task(self) -> None:
+        def _create_context(_ca: str) -> ssl.SSLContext:
+            try:
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                if _ca:
+                    ssl_context.load_verify_locations(cadata=_ca)
+                    ssl_context.verify_mode = ssl.CERT_REQUIRED
+                else:
+                    ssl_context.verify_mode = ssl.CERT_NONE
+                ssl_context.check_hostname = False
+
+                return ssl_context
+            except Exception as e:
+                _LOGGER.exception(e)
+        
+        ssl_context = await asyncio.get_running_loop().run_in_executor(
+            None, _create_context, self._ca
+        )
+
+        self._running = True
+        while self._running:
+            _LOGGER.debug(f"connecting to {self._uri}")
+            try:
+                async with wsconnect(
+                    uri=self._uri, ping_timeout=1, ping_interval=3,
+                    ssl=ssl_context,
+                    additional_headers={"X-Authorization": f'PIN-{self._pin}'}
+                ) as ws:
+                    self._ws = ws
+                    _LOGGER.info(f"connected to {self._uri}")
+
+                    # notify connection
+                    self._disconnected_flag.clear()
+                    self._connected_flag.set()
+                    self._notify('connection', True)
+
+                    async for message in ws:
+                        msg = json.loads(message)
+                        self._notify(self.MSG_EVT, msg)
+            except Exception as e:
+                self._ws = None
+                _LOGGER.exception(e)
+
+            # notify disconnection
+            if self._connected_flag.is_set():
+                self._connected_flag.clear()
+                self._disconnected_flag.set()
+                self._notify('connection', False)
+
+            # small delay between successive attempts to connect
+            if self._running:
+                await asyncio.sleep(0.5)
+
+
+class TagoGateway(TagoWebsocketClient):
+    MSG_GET_DEVICES = "req_list_devices"
+
+    async def list_devices(self) -> None:
+        return await self.send_message({'msg': self.MSG_GET_DEVICES}, 2)
+
+class TagoController(TagoWebsocketClient):
+    REQ_TEST_LINK = "req_test_link"
+    REQ_LIST_NODES = "req_list_nodes"
+
+    async def list_nodes(self, timeout=2):
+        msg = await self.send_message({'msg': self.REQ_LIST_NODES}, timeout)
+        return msg['nodes']
+
+    async def test_link(self, timeout=2):
+        msg = await self.send_message({'msg': self.REQ_TEST_LINK}, timeout)
+        return {
+            'uri': msg.get('uri'),
+            'ca': msg.get('ca_cert'),
+            'pin': msg.get('pin'),
+            'network_id': msg.get('network_id'),
+            'network_name': msg.get('network_name')
+        }
+
+
 class TagoDevice:
-    def __init__(self, conn: TagoConnection):
+    def __init__(self, conn: TagoGateway):
         super().__init__({}, conn)
         self._uid: str = ''
         self._name: str = ''
@@ -459,11 +551,11 @@ class TagoDevice:
     @property
     def host(self) -> str:
         return self._host
-    
+
     @staticmethod
     def model_num_to_desc(model: str) -> str:
         """convert model number to string"""
-        if model == 'DM8B' :
+        if model == 'DM8B':
             return 'DIN 8 Channel AC Dimmer'
         return 'Unknown'
 
@@ -500,7 +592,7 @@ class TagoDevice:
         if self.message_is_for_me(msg):
             _LOGGER.debug(f"=== process_device_msg {msg}")
             match msg["msg"]:
-                ## Device enumeration
+                # Device enumeration
                 case self.MSG_GET_STATE:
                     self._id = msg["id"]
                     self._name = msg.get("name", 'TAGO Device')
@@ -509,7 +601,7 @@ class TagoDevice:
                     self.model_desc = msg.get("model_desc", 'Unknown')
                     self.serial_number = msg.get("serial_number", 'Unknown')
 
-                    ## handle modules
+                    # handle modules
 
                     # # Create a child for every enabled output channel on the device
                     # for item in msg.get(self.TYPE_DIMMER_AC, []):

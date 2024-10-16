@@ -1,43 +1,46 @@
 {
-  "title": "Tago",
+  "title": "Tago Lighting",
   "config": {
-    "flow_title": "{name} ({model})",
+    "flow_title": "{network_name}",
     "step": {
       "user": {
-        "title": "Add New Tago Device",
+        "title": "Add New Tago Network",
         "data": {
-          "netkey": "Authentication PIN",
-          "hostname": "Host"
+          "hostname": "Controller Host"
         },
         "data_description": {
-          "netkey": "The code is provided by TAGO controller app at. Leave blank if the device is not secured.",
-          "hostname": "The hostname or IP address of the Tago device."
+          "hostname": "The hostname or IP address of the Tago Controller. You can find this information in the Tago Controller app."
         }
       },
       "zeroconf_confirm": {
-        "description": "Do you want to add {model} {name} with serial number `{serial_number}` to Home Assistant?",
-        "title": "Discovered Tago Device",
-        "data": {
-          "netkey": "Authentication PIN"
-        },
-        "data_description": {
-          "netkey": "The code is provided by TAGO controller app at. Leave blank if the device is not secured."
-        }
+        "description": "Do you want to add Tago network `{network_name}` to Home Assistant?",
+        "title": "Add Tago Network"
+      },
+      "wait_for_link": {
+        "description": "Open the Tago Controller app and authorize Home Assistant to access the Tago network."
+      },
+      "link_fail": {
+        "description": "Failed to add Tago network. Select Submit to try again."
       }
     },
     "error": {
-      "already_in_progress": "This device is already in the process of being added.",
-      "already_configured": "This device has already been configured.",
-      "cannot_connect": "Cannot connect to device.",
-      "invalid_auth": "Device authentication failed.",
+      "already_in_progress": "This network is already in the process of being added.",
+      "already_configured": "This network has already been configured.",
+      "cannot_connect": "Cannot connect to controller.",
+      "invalid_auth": "Controller authentication failed.",
+      "link_failed": "Tago controller did not authorize the integration link.",
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_in_progress": "This device is already in the process of being added.",
-      "already_configured": "This device has already been configured.",
-      "cannot_connect": "Cannot connect to device.",
-      "invalid_auth": "Device authentication failed.",
+      "already_in_progress": "This network is already in the process of being added.",
+      "already_configured": "This network has already been configured.",
+      "link_failed": "Tago controller did not authorize the integration link.",
+      "cannot_connect": "Cannot connect to controller.",
+      "invalid_auth": "Controller authentication failed.",
       "unknown": "Unexpected error"
+    },
+    "progress": {
+      "wait_for_link": "Open the Tago Controller app and authorize Home Assistant to access the Tago network."
     }
   }
 }

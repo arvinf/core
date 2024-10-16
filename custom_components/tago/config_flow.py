@@ -1,112 +1,163 @@
 """Config flow for Tago integration."""
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import ssl
 from typing import Any
 
 import voluptuous as vol
+import websockets
 
 from homeassistant import config_entries
 from homeassistant.components import zeroconf
 
-from .const import CONF_HOST, CONF_NET_KEY, DOMAIN
-from .TagoNet import TagoDevice, model_num_to_desc
+from .TagoNet import TagoController
+
+from .const import (
+    CONF_CA,
+    CONF_CTRLR_URI,
+    CONF_HOST,
+    CONF_NETID,
+    CONF_PIN,
+    CONF_NETNAME,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class TagoConfigFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 7
 
     def __init__(self):
         self.data = {}
+        self.link_task: asyncio.Task | None = None
+        self.errors = {}
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            self.controller_hostname = user_input[CONF_HOST].strip()
+            self.port = 7000
+
+            return await self.async_step_try_link()
+
+        return self.async_show_form(
+            step_id="user", data_schema=vol.Schema(
+                {vol.Required(CONF_HOST): str}
+            ), errors=self.errors
+        )
 
     async def async_step_zeroconf(
         self, discovery_info: zeroconf.ZeroconfServiceInfo
     ) -> ConfigFlowResult:
-        self.discovery_info = discovery_info
-        self.device_hostname = discovery_info.hostname.removesuffix('.').strip()
-        self.device_serialnum = discovery_info.properties.get('serialnum', '')
-        print('xxxx - async_step_zeroconf', discovery_info)
-
-        ## TODO -- change to serial number
-        await self.async_set_unique_id(self.device_serialnum)
-        print('unique', self.device_serialnum)
-        self._abort_if_unique_id_configured({CONF_HOST: self.device_hostname})
-
-        self.device_name = self.discovery_info.properties.get('name', 'Tago Device'),
-        self.device_model = model_num_to_desc(self.discovery_info.properties.get('model', 'unknown model'))
-
-        self.context.update(
-            {
-                "title_placeholders": {
-                    "serial_number":  self.device_serialnum,
-                    "name": self.device_name,
-                    "model": self.device_model
+        # self.discovery_info = discovery_info
+        if discovery_info:
+            self.controller_hostname = discovery_info.hostname.removesuffix(
+                '.').strip()
+            self.port = discovery_info.port
+            self.network_name = discovery_info.properties.get(
+                'network_name', '')
+            self.network_id = discovery_info.properties.get('network_id', '')
+            await self.async_set_unique_id(self.network_id)
+            self._abort_if_unique_id_configured({CONF_NETID: self.network_id})
+            self.context.update(
+                {
+                    "title_placeholders": {
+                        "network_name":  self.network_name
+                    }
                 }
-            }
-        )
+            )
+
         return await self.async_step_zeroconf_confirm()
 
     async def async_step_zeroconf_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle a flow initiated by zeroconf."""
+        """Confirm zeroconf configuration."""
         if user_input is not None:
-            hostname = self.discovery_info.hostname.removesuffix('.').strip()
-            netkey = user_input[CONF_NET_KEY].strip()
+            if self.link_task:
+                self.link_task.cancel()
+            self.link_task = None
+            return await self.async_step_try_link()
 
-            return await self.async_connect_and_add_device(hostname, netkey)
-
+        self._set_confirm_only()
         return self.async_show_form(
-            step_id="zeroconf_confirm", data_schema=vol.Schema(
-                {vol.Optional(CONF_NET_KEY, default=''): str}
-            ),
-            errors={},
+            step_id="zeroconf_confirm",
             description_placeholders={
-                "serial_number":  self.device_serialnum,
-                    "name": self.device_name,
-                    "model": self.device_model
-            },
+                CONF_NETNAME: self.network_name
+            }
         )
 
-    async def async_step_user(
+    async def async_step_try_link(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors = {}
+        """Wait for user to approve link on TAGO Controller app"""
+        self.errors = {}
+        if self.link_task is None:
+            self.link_task = self.hass.async_create_task(
+                self.async_link_to_controller())
 
+        if not self.link_task.done():
+            return self.async_show_progress(
+                step_id="try_link",
+                progress_action="wait_for_link",
+                progress_task=self.link_task
+            )
+        try:
+            await self.link_task
+
+        except Exception as err:
+            _LOGGER.error(err)
+            print(str(err))
+            if str(err) == 'link failed':
+                self.errors = {'base': 'link_failed'}
+                return self.async_show_progress_done(next_step_id="link_fail")
+            self.errors = {'base': 'cannot_connect'}
+            return self.async_show_progress_done(next_step_id="user")
+        finally:
+            self.link_task = None
+
+        return self.async_show_progress_done(next_step_id="link_success")
+
+    async def async_step_link_fail(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Linking failed"""
         if user_input is not None:
-            hostname = user_input[CONF_HOST].strip()
-            netkey = user_input[CONF_NET_KEY].strip()
-
-            return await self.async_connect_and_add_device(hostname, netkey)
+            if self.link_task:
+                self.link_task.cancel()
+            self.link_task = None
+            return await self.async_step_try_link()
 
         return self.async_show_form(
-            step_id="user", data_schema=vol.Schema(
-                {vol.Required(CONF_HOST): str,
-                 vol.Optional(CONF_NET_KEY, default=''): str}
-            ), errors=errors
+            step_id="link_fail",
+            errors=self.errors
         )
 
-    async def async_connect_and_add_device(self, hostname, netkey) -> ConfigFlowResult:
-        device = TagoDevice(hostname, netkey)
-        ## connect to device
-        try:
-            if await device.connect(15):
-                print('connect OK')
-        except TimeoutError:
-            return self.async_abort(reason="cannot_connect")
+    async def async_step_link_success(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        await self.async_set_unique_id(self.network_id)
+        self._abort_if_unique_id_configured({CONF_NETID: self.network_id})
 
-        name = device.name
-        serialnum = device.serial_number
-        await self.async_set_unique_id(serialnum)
-        self._abort_if_unique_id_configured()
-
-        self.data[CONF_NET_KEY] = netkey
-        self.data[CONF_HOST] = hostname
-
-        device.disconnect()
-
+        """ Linking succeeded """
+        logging.debug(f'successfully linked to tago controller for {
+                      self.network_name} ({self.network_id})')
         return self.async_create_entry(
-            title=name, data=self.data
+            title=self.network_name, data=self.data
         )
+
+    async def async_link_to_controller(self) -> None:
+        params: dict = await TagoController.link(self.controller_hostname, self.port)
+        self.network_id = params.get('network_id')
+        self.network_name = params.get('network_name')
+        self.data[CONF_CTRLR_URI] = params.get('uri')
+        self.data[CONF_PIN] = params.get('pin')
+        self.data[CONF_CA] = params.get('ca')
+        self.data[CONF_NETID] = params.get('network_id')
+        self.data[CONF_NETNAME] = params.get(
+            'network_name', 'Tago Lighting Network')
