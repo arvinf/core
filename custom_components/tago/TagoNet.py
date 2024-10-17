@@ -369,19 +369,27 @@ class TagoWebsocketClient:
     def set_ca(self, _ca: str) -> None:
         self.ca = _ca
 
+    @property
+    def uri(self):
+        return self._uri
+
     async def connect(self, timeout: float = 3) -> None:
-        if not self._task:
-            self._task = asyncio.create_task(self.connection_task())
-        elif self._ws:
-            await self._ws.close()
-        async with asyncio.timeout(timeout):
-            await self._connected_flag.wait()
+        if self.is_connected():
+            return
+
+        self._task = asyncio.create_task(self.connection_task())
+
+        try:
+            async with asyncio.timeout(timeout):
+                await self._connected_flag.wait()
+        except asyncio.TimeoutError:
+            self._running = False
+            raise
 
     async def disconnect(self, timeout: float = 3) -> None:
         self._running = False
         if self._ws:
             await self._ws.close()
-
         try:
             async with asyncio.timeout(timeout):
                 await self._disconnected_flag.wait()
@@ -441,7 +449,7 @@ class TagoWebsocketClient:
                 return ssl_context
             except Exception as e:
                 _LOGGER.exception(e)
-        
+
         ssl_context = await asyncio.get_running_loop().run_in_executor(
             None, _create_context, self._ca
         )
@@ -468,7 +476,7 @@ class TagoWebsocketClient:
                         self._notify(self.MSG_EVT, msg)
             except Exception as e:
                 self._ws = None
-                _LOGGER.exception(e)
+                # _LOGGER.exception(e)
 
             # notify disconnection
             if self._connected_flag.is_set():
@@ -482,10 +490,10 @@ class TagoWebsocketClient:
 
 
 class TagoGateway(TagoWebsocketClient):
-    MSG_GET_DEVICES = "req_list_devices"
-
+    REQ_LIST_DEVICES        = "req_list_devices"
     async def list_devices(self) -> None:
-        return await self.send_message({'msg': self.MSG_GET_DEVICES}, 2)
+        return await self.send_message({'msg': self.REQ_LIST_DEVICES}, 2)
+
 
 class TagoController(TagoWebsocketClient):
     REQ_TEST_LINK = "req_test_link"

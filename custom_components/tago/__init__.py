@@ -19,7 +19,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 import homeassistant.helpers.config_validation as cv
 
-from .const import CONF_CA, CONF_CTRLR_URI, CONF_PIN, CONF_CA, CONF_NETNAME, CONF_NETID, CONF_NODES, DOMAIN
+from .const import (
+    CONF_CA,
+    CONF_CTRLR_URI,
+    CONF_NETID,
+    CONF_NETNAME,
+    CONF_NODES,
+    CONF_PIN,
+    DOMAIN,
+)
 from .TagoNet import TagoController, TagoGateway
 
 PLATFORMS: list[str] = [Platform.LIGHT]
@@ -31,46 +39,44 @@ _LOGGER = logging.getLogger(__name__)
 #     hass.data.setdefault(DOMAIN, {})
 #     return True
 
+async def refresh_gateway_devicelist(gw: TagoGateway) -> dict:
+    try:
+        await gw.connect()
+        return await gw.list_devices()
+    except asyncio.TimeoutError:
+        logging.warning(f'Could not connect to Tago device {gw.uri}')
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     entry_data = hass.data[DOMAIN].setdefault(entry.entry_id, {})
     pin = entry.data.get(CONF_PIN, '3227191')
     ca = entry.data.get(CONF_CA, '')
-    
+
     # entity_registry = er.async_get(hass)
     # device_registry = dr.async_get(hass)
-    # if entry.data.get('foXXX'):
-    #     print('XXXXXXXXXXXXXXX have data - ' + entry.data['foXXX'])
-    # else:
-    #     print('========== update')
-    # hass.config_entries.async_update_entry(entry,  data={**entry.data, "foXXX": '888'})
-        
-    # print(entry.data)
     nodes = entry.data.get(CONF_NODES, [])
 
-    ## TODO -- use zerconf to find 
+    ## refresh node list from the controller
     try:
-        controller = TagoController(entry.data[CONF_CTRLR_URI], 
+        controller = TagoController('wss://localhost:7000',
                                 entry.data[CONF_CA],
                                 pin)
-        
+
         await controller.connect()
         nodes = await controller.list_nodes()
         if len(nodes):
             hass.config_entries.async_update_entry(entry,  data={**entry.data, CONF_NODES: nodes})
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logging.warning(f'Could not connect to Tago controller for {entry.data[CONF_NETNAME]}')
-        
-    print(nodes)
-    ## build device list
-    # try:
-    #     for n in nodes:
-    #         gw = TagoGateway(uri=n['uri'], ca=ca, pin=pin)
-    #         devices = await gw.list_devices()
-    #         print(devices)
-    # except asyncio.TimeoutError:
-    #     logging.warning(f'Could not connect to Tago controller for {entry.data[CONF_NETNAME]}')
 
+    # build device list
+    gw_coro = []
+    for n in nodes:
+        uri = n['uri']
+        gw = TagoGateway(uri=n['uri'], ca=ca, pin=pin)
+        gw_coro.append(refresh_gateway_devicelist(gw))
+    devices = await asyncio.gather(*gw_coro)
+    print(devices)
     # device_registry = dr.async_get(hass)
     # device_registry.async_get_or_create(
     #         config_entry_id=entry.entry_id,

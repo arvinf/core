@@ -1,6 +1,8 @@
 """Platform for light integration."""
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
@@ -9,12 +11,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 
-import logging
-
 _LOGGER = logging.getLogger(__name__)
 
 from .TagoNet import TagoDevice
-from .models import TagoPeripheralHA
 
 
 async def async_setup_entry(

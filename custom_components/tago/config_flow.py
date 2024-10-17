@@ -2,28 +2,24 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import ssl
 from typing import Any
 
 import voluptuous as vol
-import websockets
 
 from homeassistant import config_entries
 from homeassistant.components import zeroconf
-
-from .TagoNet import TagoController
 
 from .const import (
     CONF_CA,
     CONF_CTRLR_URI,
     CONF_HOST,
     CONF_NETID,
-    CONF_PIN,
     CONF_NETNAME,
+    CONF_PIN,
     DOMAIN,
 )
+from .TagoNet import TagoController
 
 _LOGGER = logging.getLogger(__name__)
 
