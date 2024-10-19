@@ -4,20 +4,19 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-
-from .const import DOMAIN
+from homeassistant.components.light import (
+    DOMAIN
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 from .TagoNet import TagoLightHA
 
-
 async def async_setup_entry(hass, entry: ConfigEntry, async_add_entities):
-    tagodevice = hass.data[DOMAIN][entry.entry_id]
-    new_lights = list()
+    lights : list[TagoLightHA] = list()
+    entities = entry.runtime_data
+    for e in entities:
+        if e.is_of_domain(DOMAIN):
+            lights.append(e)
 
-    for light in tagodevice.lights:
-        new_lights.append(TagoLightHA(proxy=light))
-
-    if len(new_lights):
-        async_add_entities(new_lights)
+    async_add_entities(lights)

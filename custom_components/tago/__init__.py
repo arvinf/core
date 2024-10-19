@@ -12,7 +12,6 @@ from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ID,
     ATTR_SUGGESTED_AREA,
-    CONF_HOST,
     Platform,
 )
 from homeassistant.core import HomeAssistant
@@ -28,23 +27,12 @@ from .const import (
     CONF_PIN,
     DOMAIN,
 )
-from .TagoNet import TagoController, TagoGateway
+from .TagoNet import TagoController, entities_from_nodes
 
-PLATFORMS: list[str] = [Platform.LIGHT]
+PLATFORMS: list[str] = [Platform.LIGHT, Platform.FAN, Platform.SWITCH, Platform.COVER, Platform.BUTTON]
 
 _LOGGER = logging.getLogger(__name__)
 
-# async def async_setup(hass: HomeAssistant, base_config: ConfigType) -> bool:
-#     print('async_setups')
-#     hass.data.setdefault(DOMAIN, {})
-#     return True
-
-async def refresh_gateway_devicelist(gw: TagoGateway) -> dict:
-    try:
-        await gw.connect()
-        return await gw.list_devices()
-    except asyncio.TimeoutError:
-        logging.warning(f'Could not connect to Tago device {gw.uri}')
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
@@ -52,115 +40,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     pin = entry.data.get(CONF_PIN, '3227191')
     ca = entry.data.get(CONF_CA, '')
 
-    # entity_registry = er.async_get(hass)
-    # device_registry = dr.async_get(hass)
     nodes = entry.data.get(CONF_NODES, [])
 
-    ## refresh node list from the controller
+    # refresh node list from the controller
     try:
         controller = TagoController('wss://localhost:7000',
-                                entry.data[CONF_CA],
-                                pin)
+                                    entry.data[CONF_CA],
+                                    pin)
 
-        await controller.connect()
+        await controller.connect(timeout=4)
         nodes = await controller.list_nodes()
         if len(nodes):
-            hass.config_entries.async_update_entry(entry,  data={**entry.data, CONF_NODES: nodes})
+            hass.config_entries.async_update_entry(
+                entry,  data={**entry.data, CONF_NODES: nodes})
     except TimeoutError:
-        logging.warning(f'Could not connect to Tago controller for {entry.data[CONF_NETNAME]}')
+        logging.warning(f'Could not connect to Tago controller for {
+                        entry.data[CONF_NETNAME]}')
 
-    # build device list
-    gw_coro = []
-    for n in nodes:
-        uri = n['uri']
-        gw = TagoGateway(uri=n['uri'], ca=ca, pin=pin)
-        gw_coro.append(refresh_gateway_devicelist(gw))
-    devices = await asyncio.gather(*gw_coro)
-    print(devices)
-    # device_registry = dr.async_get(hass)
-    # device_registry.async_get_or_create(
-    #         config_entry_id=entry.entry_id,
-    #         identifiers={(DOMAIN, device.uid)},
-    #         serial_number=device.uid,
-    #         manufacturer=device.manufacturer,
-    #         name=device.name,
-    #         model=device.model_desc,
-    #         sw_version=device.fw_rev,
-    #         hw_version=device.model_name,
-    #     )
+    entities = entities_from_nodes(nodes)
+    print(entities)
+    entry.runtime_data = entities
 
-    # Save tagonet instance, to be used by platforms
-    # hostname = entry.data.get(CONF_HOST)
-    # netId = entry.data.get(CONF_NETID, '')
-    # device = TagoDevice(hostname, netId)
-    # print('--- entry ', entry.entry_id)
-
-    # # connect to device
-    # try:
-    #     await device.connect(10)
-    #     _LOGGER.info("All devices enumerated.")
-
-    #     hass.data[DOMAIN][entry.entry_id] = device
-
-    #     def bridge_events(
-    #         entity: TagoBridge, entity_id: str, message: dict[str, str]
-    #     ) -> None:
-    #         data = {
-    #             ATTR_ID: entity_id,
-    #             "action": message.get("type"),
-    #             "keypad": "0x{:2x}".format(message.get("address")),
-    #             "key": message.get("key"),
-    #             "duration": "long"
-    #             if message.get("duration") > 1
-    #             else "short",
-    #         }
-    #         hass.bus.fire("tago_event", data)
-
-    #     device_registry = dr.async_get(hass)
-
-    #     # Set handler to catch messages from bridges, such as modbus keypads
-    #     for bridge in device.bridges:
-    #         bridge.set_message_handler(bridge_events)
-
-    #     # register device
-    #     device_registry.async_get_or_create(
-    #         config_entry_id=entry.entry_id,
-    #         configuration_url=f"http://{device.host}/",
-    #         identifiers={(DOMAIN, device.uid)},
-    #         serial_number=device.uid,
-    #         manufacturer=device.manufacturer,
-    #         name=device.name,
-    #         model=device.model_desc,
-    #         sw_version=device.fw_rev,
-    #         hw_version=device.model_name,
-    #     )
-
-    #     await hass.config_entries.async_forward_entry_setups(
-    #         entry, PLATFORMS
-    #     )
-    # except TimeoutError:
-    #     _LOGGER.error("Timedout waiting to connect to all TagoNet devices.")
+    await hass.config_entries.async_forward_entry_setups(
+        entry, PLATFORMS
+    )
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    print('unload')
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
         _LOGGER.debug("Unloaded entry for %s", entry.entry_id)
-
-    return unload_ok
-
-    # device = hass.data[DOMAIN][entry.entry_id]
-    # if device:
-    #     await device.disconnect()
-    if unload_ok := await hass.config_entries.async_unload_platforms(
-        entry, PLATFORMS
-    ):
-        pass
-        # hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
