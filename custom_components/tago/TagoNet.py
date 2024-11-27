@@ -252,7 +252,7 @@ class TagoBridge(TagoEntityHA):
 
 
 class TagoLightHA(TagoEntityHA, LightEntity):
-    LIGHT_ONOFF = "light"
+    LIGHT_ONOFF = "light_onoff"
     LIGHT_MONO = "light_dimmable"
     LIGHT_RGB = "light_rgb"
     LIGHT_RGBW = "light_rgbw"
