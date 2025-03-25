@@ -1,15 +1,13 @@
 """Platform for switch integration."""
 from __future__ import annotations
-from .TagoNet import TagoSwitch, TagoDevice
-from .entity import TagoEntityHA
 
 import logging
 
+from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.switch import (
-    SwitchDeviceClass,
-    SwitchEntity,
-)
+
+from .entity import TagoEntityHA
+from .TagoNet import TagoDevice, TagoSwitch
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ async def async_setup_entry(hass, entry: ConfigEntry, async_add_entities):
     lights: list[TagoSwitchHA] = list()
     device: TagoDevice = entry.runtime_data
     for e in device.entities:
-        if TagoSwitch.is_of_type(type=e.type):
+        if type(e) == TagoSwitch:
             lights.append(TagoSwitchHA(e))
 
     async_add_entities(lights)

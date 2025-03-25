@@ -1,28 +1,18 @@
 from __future__ import annotations
-from typing import Callable, Dict, List, Optional, Tuple, Union, Coroutine, Any
-import random
-import string
 
 import asyncio
 from collections.abc import Callable
+import hashlib
 import json
 import logging
 import math
-import hashlib
-import time
-
+import random
 import ssl
-from websockets.asyncio.client import ClientConnection, connect as wsconnect
-from websockets.exceptions import InvalidHandshake
-
-from homeassistant.const import ATTR_SUGGESTED_AREA
-from homeassistant.helpers.device_registry import DeviceInfo
-
-
-from homeassistant.components.button import ButtonEntity
+import string
+import time
 import uuid
 
-from .const import (DOMAIN)
+from websockets.asyncio.client import ClientConnection, connect as wsconnect
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,7 +41,7 @@ class TagoMessage:
     @classmethod
     def from_payload(cls, message: str):
         self = cls()
-        # print('>> ' + str(message))
+        #print('>> ' + str(message))
         data = json.loads(message)
         self.data = data
         self.rsp = data.get(TagoMessage.PROP_RSP)
@@ -85,7 +75,10 @@ class TagoMessage:
             data[TagoMessage.PROP_DST] = self.dst
         data[TagoMessage.PROP_REF] = TagoMessage.create_random_str()
         data[TagoMessage.PROP_REQ] = self.req
-        return json.dumps(data)
+
+        msg = json.dumps(data)
+        #print('<< ' + str(msg))
+        return msg
 
     @property
     def content(self):
@@ -123,9 +116,10 @@ class TagoBase:
     PROP_ID = "id"
     PROP_NAME = "name"
     PROP_LOCATION = "location"
-    MSG_GET_STATE = "get_state"
+    PROP_TAG = "tag"
+    REQ_GET_STATE = "get_state"
     EVT_STATE_CHANGED = "state_changed"
-    MSG_GET_CONFIG = "get_config"
+    REQ_GET_CONFIG = "get_config"
     EVT_CONFIG_CHANGED = "config_changed"
 
     def __init__(self, eid: str):
@@ -159,6 +153,7 @@ class TagoEntity(TagoBase):
         self._location: str = json.get(TagoEntity.PROP_LOCATION)
         self._type: str = json.get(TagoEntity.PROP_TYPE, self.VALUE_UNUSED)
         self._fault: list[str] = list()
+        self._tag = json.get(TagoEntity.PROP_TAG)
 
         # if len(self._location.strip()):
         #     info = DeviceInfo(
@@ -177,9 +172,7 @@ class TagoEntity(TagoBase):
         #     self._attr_device_info = info
 
     @classmethod
-    def is_of_type(cls, type: str | dict):
-        if isinstance(type, dict):
-            type = type[TagoEntity.PROP_TYPE]
+    def is_of_type(cls, type: str):
         return (type in cls.types)
 
     @property
@@ -195,6 +188,10 @@ class TagoEntity(TagoBase):
         return self._location
 
     @property
+    def dashboard_uri(self):
+        return f'{self._device.dashboard_uri}?goto={self._eid}'
+
+    @property
     def is_connected(self) -> bool:
         return self._device.is_connected
 
@@ -206,10 +203,13 @@ class TagoEntity(TagoBase):
     def has_fault(self) -> bool:
         return len(self._fault) > 0
 
+    def is_unused(self) -> bool:
+        return self.type == self.VALUE_UNUSED
+
     async def connection_state_changed(self, connected: bool) -> None:
         if connected:
             # request state refresh
-            await self.send_request(req=self.MSG_GET_STATE)
+            await self.send_request(req=self.REQ_GET_STATE)
 
     async def send_request(self, req: str, data: dict = {}) -> None:
         await self._device.send_request(req=req, dst=self._eid, data=data)
@@ -226,16 +226,16 @@ class TagoEntity(TagoBase):
 
         if msg.is_event():
             self.handle_event(msg)
-        elif msg.is_response(self.MSG_GET_STATE):
+        elif msg.is_response(self.REQ_GET_STATE):
             self.handle_state_change(msg)
-        elif msg.is_response(self.MSG_GET_CONFIG):
+        elif msg.is_response(self.REQ_GET_CONFIG):
             self.handle_config_change(msg)
 
     def handle_state_change(self, msg: TagoMessage) -> None:
         self.update()
-        
+
     def handle_config_change(self, msg: TagoMessage) -> None:
-        self.update()        
+        self.update()
 
     @staticmethod
     def convert_value_to_float(value: int, max=1.0) -> float:
@@ -251,9 +251,11 @@ class TagoDevice(TagoBase):
     REQ_DEVICE_REBOOT = 'reboot'
     REQ_DEVICE_IDENTIFY = 'identify'
     PROP_NODES = 'nodes'
+    PROP_LOADS = 'loads'
 
-    def __init__(self, hoststr: str, authkey: str = None):
+    def __init__(self, hoststr: str, authkey: str = None, useSSL: bool = False):
         super().__init__(None)
+        self._usessl = useSSL
         self._hoststr = hoststr
         self._authkey: str = authkey
         self._modelnum: str = None
@@ -270,11 +272,13 @@ class TagoDevice(TagoBase):
 
     @property
     def dashboard_uri(self):
-        return f'https://{self._hoststr}/'
+        ssl = 's' if self._usessl else ''
+        return f'http{ssl}://{self._hoststr}/'
 
     @property
     def uri(self):
-        return f'wss://{self._hoststr}/api/v1/ws'
+        ssl = 's' if self._usessl else ''
+        return f'ws{ssl}://{self._hoststr}/api/v1/ws'
 
     @property
     def model_num(self):
@@ -304,7 +308,7 @@ class TagoDevice(TagoBase):
     def is_connected(self):
         return self._ws is not None
 
-    async def connect(self, timeout: Optional[float] = None) -> None:
+    async def connect(self, timeout: float | None = None) -> None:
         """Connect function that waits for connection or error with optional timeout."""
         # Create the two event flags
         connected = asyncio.Event()
@@ -330,16 +334,16 @@ class TagoDevice(TagoBase):
         # Check if timeout occurred
         if not done:
             self._task.cancel()
-            raise asyncio.TimeoutError("Connection timed out")
+            raise TimeoutError("Connection timed out")
 
         # Check which event was set
         if connected.is_set():
             return  # Success case
-        elif autherror.is_set():
+        if autherror.is_set():
             self._task.cancel()
             raise PermissionError("Authentication failed")
 
-    async def disconnect(self, timeout: Optional[float] = None) -> None:
+    async def disconnect(self, timeout: float | None = None) -> None:
         self._running = False
         if self._ws:
             await self._ws.close()
@@ -349,8 +353,8 @@ class TagoDevice(TagoBase):
         else:
             try:
                 await asyncio.wait_for(self._task, timeout=timeout)
-            except asyncio.TimeoutError:
-                raise asyncio.TimeoutError(
+            except TimeoutError:
+                raise TimeoutError(
                     "Timed out waiting for self._task to complete")
 
         if self._task.exception() is not None:
@@ -359,7 +363,7 @@ class TagoDevice(TagoBase):
 
     async def send_request(self, req: str, data: dict = dict(), dst: str = None, responseTimeout: float = None) -> None | TagoMessage:
         if self._ws is None:
-            return
+            return None
 
         """ sends a message to peer, and optionally waits for a response to be received or a timeout to occur. """
         msg = TagoMessage.make_request(req=req, dst=dst, data=data)
@@ -374,7 +378,7 @@ class TagoDevice(TagoBase):
                     flag.set()
 
         payload = msg.get_message()
-        _LOGGER.warning(f"=== send_request {payload}")
+        # _LOGGER.warning(f"=== send_request {payload}")
         await self._ws.send(payload)
         if responseTimeout:
             async with asyncio.timeout(responseTimeout):
@@ -406,7 +410,10 @@ class TagoDevice(TagoBase):
         while self._running:
             try:
                 _LOGGER.info(f"connecting to {self.uri}")
-                ssl_context = await self.get_ssl_context()
+                if self._usessl:
+                    ssl_context = await self.get_ssl_context()
+                else:
+                    ssl_context = None
                 async with wsconnect(uri=self.uri, ping_timeout=1, ping_interval=3, close_timeout=5, ssl=ssl_context) as ws:
                     self._ws = ws
                     # login
@@ -467,56 +474,57 @@ class TagoDevice(TagoBase):
                     async for message in ws:
                         msg = TagoMessage.from_payload(message)
                         if msg.is_response([TagoDevice.REQ_LIST_NODES]):
-                            for node_id, loads in msg.data.get(TagoDevice.PROP_NODES, dict()).items():
-                                for item in loads:
+                            for key, value in msg.data.get(TagoDevice.PROP_NODES, dict()).items():
+                                for item in value.get(TagoDevice.PROP_LOADS, list()):
                                     entity = None
-
-                                    if TagoLight.is_of_type(item):
+                                    if TagoLight.is_of_type(item.get(TagoEntity.PROP_TYPE)):
                                         entity = TagoLight(item, self)
-                                    elif TagoSwitch.is_of_type(item):
+                                    elif TagoSwitch.is_of_type(item.get(TagoEntity.PROP_TYPE)):
                                         entity = TagoSwitch(item, self)
-                                    elif TagoCover.is_of_type(item):
+                                    elif TagoCover.is_of_type(item.get(TagoEntity.PROP_TYPE)):
                                         entity = TagoCover(item, self)
-                                    elif TagoFan.is_of_type(item):
+                                    elif TagoFan.is_of_type(item.get(TagoEntity.PROP_TYPE)):
                                         entity = TagoFan(item, self)
+                                    else: ## unused loads
+                                        entity = TagoEntity(item, self)
 
-                                    if entity:
-                                        self._entities.append(entity)
+                                    self._entities.append(entity)
 
                             break
 
-                    # connected to device, notify any entities
+                    # connected to device!
                     connected.set()
                     for entity in self._entities:
                         await entity.connection_state_changed(True)
-
                     self.update()
 
-                    # process all messages from tago device
+                    # process all messages from device
                     async for message in ws:
                         msg = TagoMessage.from_payload(message)
                         if msg.src == self._eid and msg.is_event([TagoDevice.EVT_CONFIG_CHANGED]):
-                            # TODO - reprocess entity changes??
                             pass
 
                         for entity in self._entities:
-                            await entity.handle_message(msg)
+                            try:
+                                await entity.handle_message(msg)
+                            except Exception as e:
+                                _LOGGER.exception(e)
 
             except Exception as e:
                 _LOGGER.exception(e)
-                pass
 
             self._ws = None
 
             # notify disconnection
             if connected.is_set():
                 for entity in self._entities:
-                    await entity.connection_state_changed(False)
+                    try:
+                        await entity.connection_state_changed(False)
+                    except Exception as e:
+                        _LOGGER.exception(e)
                 connected.clear()
-
             self.update()
 
-            # small delay between successive attempts to connect
             if self._running:
                 await asyncio.sleep(2)
 
@@ -558,7 +566,7 @@ class TagoSwitch(TagoEntity):
         super().handle_state_change(msg)
 
 
-class Ramp():
+class Ramp:
     def __init__(self, start: list[float], end: list[float], duration: int, elapsed: int, update_interval: int, callback: Callable):
         self.start = start
         self.end = end
@@ -570,10 +578,10 @@ class Ramp():
         self.task: asyncio.Task = asyncio.create_task(self.task())
 
     async def task(self) -> None:
-        while True:        
-            try:    
+        while True:
+            try:
                 elapsed = ((round(time.time() * 1000)) -
-                        self.start_time) + self.elapsed
+                           self.start_time) + self.elapsed
                 # ramp finished?
                 if elapsed > self.duration:
                     return
@@ -602,7 +610,8 @@ class Ramp():
 
 class TagoLight(TagoEntity):
     LIGHT_ONOFF = "light_onoff"
-    LIGHT_MONO = "light_dimmable"
+    LIGHT_DIMMABLE = "light_dimmable"
+    LIGHT_MONO = "light_mono"
     LIGHT_RGB = "light_rgb"
     LIGHT_RGBW = "light_rgbw"
     LIGHT_RGB_CCT = "light_rgbww"
@@ -623,12 +632,15 @@ class TagoLight(TagoEntity):
     PROP_START = "start"
     PROP_END = "end"
     PROP_FAULT = "fault"
+    PROP_EFFECT = "effect"
+    VALUE_FLASH = "flash"
     REQ_SET_LIGHT = "set_light"
     REQ_STOP_RAMP = "stop_ramp"
+    REQ_LIGHT_EFFECT = "light_effect"
 
-    types = [LIGHT_ONOFF, LIGHT_MONO, LIGHT_RGB,
+    types = [LIGHT_ONOFF, LIGHT_DIMMABLE, LIGHT_MONO, LIGHT_RGB,
              LIGHT_RGBW, LIGHT_RGB_CCT, LIGHT_CCT]
-    
+
     CT_MIN = 1400
     CT_MAX = 10000
 
@@ -637,15 +649,11 @@ class TagoLight(TagoEntity):
         self._brightness: int = 0
         self._colour_x: float = 0.0
         self._colour_y: float = 0.0
-        self._ct: float = 0.0        
+        self._ct: float = 0.0
         self._ct_range_min: int = TagoLight.CT_MIN
         self._ct_range_max: int = TagoLight.CT_MAX
         self._ramp: Ramp = None
-        
-        ct_basis = json.get(TagoLight.PROP_CT_RANGE, list())
-        if len(ct_basis) >= 2:
-            self._ct_range_min = max(ct_basis[0], TagoLight.CT_MIN)
-            self._ct_range_max = min(ct_basis[1], TagoLight.CT_MAX)
+        self.parse_state_json(json)
 
     def _brightness_param_parse(self, brightness: float, duration: float = None, rate: float = None) -> dict:
         data = {}
@@ -660,8 +668,12 @@ class TagoLight(TagoEntity):
 
         return data
 
+    async def set_light_flash(self, duration: int) -> None:
+        """Flash all channels for a specified duration"""
+        await self.send_request(req=self.REQ_LIGHT_EFFECT, data={self.PROP_EFFECT: self.VALUE_FLASH, self.PROP_DURATION: duration})
+
     async def set_brightness(self, brightness: float, duration: float = None, rate: float = None) -> None:
-        """ Set brightness to specified value between 0.0 and 1.0 """
+        """Set brightness to specified value between 0.0 and 1.0"""
         if brightness is None:
             raise ValueError('Brightness must be specified')
 
@@ -669,12 +681,12 @@ class TagoLight(TagoEntity):
         await self.send_request(req=self.REQ_SET_LIGHT, data=data)
 
     async def adjust_brightness(self, brightness: float, duration: float = None, rate: float = None) -> None:
-        """ Adjust brightness up or down between -1.0 and 1.0 """
+        """Adjust brightness up or down between -1.0 and 1.0"""
         data = self._brightness_param_parse(brightness, duration, rate)
         await self.send_request(req=self.REQ_SET_LIGHT, data=data)
 
     async def set_ct(self, ct: float,  brightness: float = None, duration: float = None, rate: float = None) -> None:
-        """ Set colour temperature ratio and (optional) brightness to be between 0.0 and 1.0 """
+        """Set colour temperature ratio and (optional) brightness to be between 0.0 and 1.0"""
         if ct is None:
             raise ValueError('Colour Temperature must be specified')
 
@@ -683,7 +695,7 @@ class TagoLight(TagoEntity):
         await self.send_request(req=self.REQ_SET_LIGHT, data=data)
 
     async def set_colour(self, colour: tuple[float, float],  brightness: float = None, duration: float = None) -> None:
-        """ Set colour XY points and (optional) brightness to be between 0.0 and 1.0 """
+        """Set colour XY points and (optional) brightness to be between 0.0 and 1.0"""
         if colour is None or len(colour) < 2:
             raise ValueError('Colour XY pair must be specified')
 
@@ -693,7 +705,7 @@ class TagoLight(TagoEntity):
         await self.send_request(req=self.REQ_SET_LIGHT, data=data)
 
     async def stop_ramp(self):
-        """ Stop any active ramps """
+        """Stop any active ramps"""
         await self.send_request(req=self.REQ_STOP_RAMP)
 
     @property
@@ -728,18 +740,13 @@ class TagoLight(TagoEntity):
 
         self.update()
 
-    def handle_state_change(self, msg: TagoMessage) -> None:
-        data = msg.content
-
-        # cancel any running ramps
-        if self._ramp:
-            self._ramp.cancel()
-            self._ramp = None
-
+    def parse_state_json(self, data: dict) -> None:
         self._brightness = data.get(self.PROP_BRIGHTNESS, self._brightness)
         self._ct = data.get(self.PROP_CT, self._ct)
-        self._ct_range_min = max(data.get(self.PROP_CT_RANGE, self._ct_range_min), TagoLight.CT_MIN)
-        self._ct_range_max = min(data.get(self.PROP_CT_RANGE, self._ct_range_max), TagoLight.CT_MAX)
+        ct_basis = data.get(TagoLight.PROP_CT_RANGE, list())
+        if len(ct_basis) > 2:
+            self._ct_range_min = max(ct_basis[0], TagoLight.CT_MIN)
+            self._ct_range_max = min(ct_basis[1], TagoLight.CT_MAX)
         self._colour_x = data.get(self.PROP_X, self._colour_x)
         self._colour_y = data.get(self.PROP_Y, self._colour_y)
 
@@ -749,14 +756,25 @@ class TagoLight(TagoEntity):
         else:
             self._fault = list()
 
+    def handle_state_change(self, msg: TagoMessage) -> None:
+        data = msg.content
+
+        # cancel any running ramps
+        if self._ramp:
+            self._ramp.cancel()
+            self._ramp = None
+
+        self.parse_state_json(msg.content)
+
         # if a ramp is active, 'animate' the value change by generating
         # periodic updates
-        ramp : dict = data.get(self.PROP_RAMP, dict())
+        ramp: dict = data.get(self.PROP_RAMP, dict())
         if ramp:
             start = ramp.get(self.PROP_START, dict())
             end = ramp.get(self.PROP_END, dict())
             duration = ramp.get(self.PROP_DURATION, 0)
-            elapsed = ramp.get(self.PROP_ELAPSED, 0)        
+            elapsed = ramp.get(self.PROP_ELAPSED, 0)
+
             def get_values(collection, map):
                 values = list()
                 for i in range(len(map)):
@@ -768,10 +786,12 @@ class TagoLight(TagoEntity):
                         values.append(None)
                 return values
 
-            props = [self.PROP_BRIGHTNESS, self.PROP_CT, self.PROP_X, self.PROP_Y]
+            props = [self.PROP_BRIGHTNESS,
+                     self.PROP_CT, self.PROP_X, self.PROP_Y]
             start_values = get_values(start, props)
             end_values = get_values(end, props)
-            self._ramp = Ramp(start_values, end_values, duration, elapsed, 1/8, self.ramp_update)
+            self._ramp = Ramp(start_values, end_values,
+                              duration, elapsed, 1/8, self.ramp_update)
 
         super().handle_state_change(msg)
 

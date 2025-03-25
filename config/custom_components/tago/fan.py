@@ -1,18 +1,14 @@
 """Platform for fan integration."""
 from __future__ import annotations
-from .TagoNet import TagoFan, TagoDevice
-from .entity import TagoEntityHA
 
 import logging
 
+from homeassistant.components.fan import FanEntity, FanEntityFeature
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.fan import (
-    DOMAIN,
-    FanEntity, FanEntityFeature,
-)
-from homeassistant.util.percentage import (
-    ranged_value_to_percentage,
-)
+from homeassistant.util.percentage import ranged_value_to_percentage
+
+from .entity import TagoEntityHA
+from .TagoNet import TagoDevice, TagoFan
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,7 +45,7 @@ async def async_setup_entry(hass, entry: ConfigEntry, async_add_entities):
     lights: list[TagoFanHA] = list()
     device : TagoDevice = entry.runtime_data
     for e in device.entities:
-        if TagoFan.is_of_type(type=e.type):
+        if type(e) == TagoFan:
             lights.append(TagoFanHA(e))
 
     async_add_entities(lights)

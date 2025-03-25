@@ -1,16 +1,18 @@
 """Platform for cover integration."""
 from __future__ import annotations
-from .TagoNet import TagoCover, TagoDevice
-from .entity import TagoEntityHA
 
 import logging
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.cover import (
-    DOMAIN,
     ATTR_POSITION,
-    CoverEntity, CoverEntityFeature, CoverDeviceClass
+    CoverDeviceClass,
+    CoverEntity,
+    CoverEntityFeature,
 )
+from homeassistant.config_entries import ConfigEntry
+
+from .entity import TagoEntityHA
+from .TagoNet import TagoCover, TagoDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,7 +64,7 @@ async def async_setup_entry(hass, entry: ConfigEntry, async_add_entities):
     lights: list[TagoCoverHA] = list()
     device : TagoDevice = entry.runtime_data
     for e in device.entities:
-        if TagoCover.is_of_type(type=e.type):
+        if type(e) == TagoCover:
             lights.append(TagoCoverHA(e))
 
     async_add_entities(lights)

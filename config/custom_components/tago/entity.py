@@ -1,16 +1,17 @@
-from .TagoNet import TagoEntity, TagoDevice
 import json
+
 from homeassistant.helpers.entity import DeviceInfo
-from .const import (
-    DOMAIN,
-)
+
+from .const import DOMAIN
+from .TagoNet import TagoEntity
+
 
 class TagoEntityHA:
     MAX_VALUE = 10000
 
     def __init__(self, entity: TagoEntity):
         self._entity: TagoEntity = entity
-        self._entity.set_on_state_changed(self.on_state_updated)        
+        self._entity.set_on_state_changed(self.on_state_updated)
 
         # if len(self._location.strip()):
         #     info[ATTR_SUGGESTED_AREA] = self._location
@@ -44,14 +45,13 @@ class TagoEntityHA:
 
     @property
     def has_entity_name(self) -> bool:
-        return False
         return (self._entity.name is not None)
 
     @property
     def name(self) -> str:
         """Name"""
-        return self._entity.name or 'Unnamed'
-    
+        return self._entity.name or (f'{self._entity._device.unique_id} {self._entity._tag}' if self._entity._tag else self._entity.unique_id)
+
     @property
     def unique_id(self) -> str:
         """Unique id"""
@@ -63,16 +63,24 @@ class TagoEntityHA:
         return self._entity.is_connected
 
     @property
-    def device_info(self) -> DeviceInfo:
+    def type_to_string(self) -> int:
+        return ''
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        if self._entity.is_unused():
+            return None
         return DeviceInfo(
-            identifiers={(DOMAIN, self._entity._device.unique_id)},
-            name=self._entity._device.name,
+            identifiers={(DOMAIN, self._entity.unique_id)},
+            name=f'{self._entity._device.unique_id} - {self._entity._tag}',
             manufacturer=self._entity._device.manufacturer,
-            model=self._entity._device.model_num,
-            configuration_url=self._entity._device.dashboard_uri,
+            model=self.type_to_string,
+            configuration_url=self._entity.dashboard_uri,
+            suggested_area=self._entity.location,
+            serial_number=self._entity._tag,
+            via_device=(DOMAIN, self._entity._device.unique_id)
         )
-        
-            
+
     @staticmethod
     def convert_value_to_device(
         intensity: float, srclimit: float = 255
