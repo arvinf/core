@@ -189,7 +189,7 @@ class TagoEntity(TagoBase):
 
     @property
     def dashboard_uri(self):
-        return f'{self._device.dashboard_uri}?goto={self._eid}'
+        return f'{self._device.dashboard_uri}?find={self._eid}'
 
     @property
     def is_connected(self) -> bool:
@@ -207,9 +207,10 @@ class TagoEntity(TagoBase):
         return self.type == self.VALUE_UNUSED
 
     async def connection_state_changed(self, connected: bool) -> None:
+        self.update()
         if connected:
             # request state refresh
-            await self.send_request(req=self.REQ_GET_STATE)
+            await self.send_request(req=self.REQ_GET_STATE)        
 
     async def send_request(self, req: str, data: dict = {}) -> None:
         await self._device.send_request(req=req, dst=self._eid, data=data)
@@ -409,12 +410,13 @@ class TagoDevice(TagoBase):
         self._running = True
         while self._running:
             try:
-                _LOGGER.info(f"connecting to {self.uri}")
+                _LOGGER.debug(f"connecting to {self.uri}")
                 if self._usessl:
                     ssl_context = await self.get_ssl_context()
                 else:
                     ssl_context = None
                 async with wsconnect(uri=self.uri, ping_timeout=1, ping_interval=3, close_timeout=5, ssl=ssl_context) as ws:
+                    _LOGGER.debug(f"connected to {self.uri}")
                     self._ws = ws
                     # login
                     try:
@@ -510,8 +512,9 @@ class TagoDevice(TagoBase):
                             except Exception as e:
                                 _LOGGER.exception(e)
 
-            except Exception as e:
-                _LOGGER.exception(e)
+            except Exception:
+                # _LOGGER.exception(e)
+                pass
 
             self._ws = None
 

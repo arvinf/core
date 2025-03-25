@@ -26,6 +26,7 @@ def generate_device_info(device: TagoDevice) -> DeviceInfo:
         manufacturer=device.manufacturer,
         model=device.model_num,
         sw_version=device.firmware_rev,
+        serial_number=device.unique_id,
         configuration_url=device.dashboard_uri,
     )
 
@@ -66,7 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     device : TagoDevice = entry.runtime_data
-    device.disconnect()
+    await device.disconnect()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:

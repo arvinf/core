@@ -28,8 +28,9 @@ class TagoLightHA(TagoEntityHA, LightEntity):
     _attr_supported_color_modes = [ColorMode.XY, ColorMode.COLOR_TEMP]
     _attr_supported_features = LightEntityFeature.TRANSITION | LightEntityFeature.FLASH
 
-    def __init__(self, entity: TagoLight):
+    def __init__(self, entity: TagoLight):        
         super().__init__(entity)
+        self._last_brightness = 255
 
     @property
     def is_dimmable(self):
@@ -125,10 +126,10 @@ class TagoLightHA(TagoEntityHA, LightEntity):
     @property
     def xy_color(self) -> tuple[float, float] | None:
         if self._entity.type in [TagoLight.LIGHT_RGB, TagoLight.LIGHT_RGB_CCT, TagoLight.LIGHT_RGBW]:
-            return (self._entity.colour_xy)
+            return self._entity.colour_xy
         return None
 
-    async def async_turn_on(self, **kwargs):
+    async def async_turn_on(self, **kwargs):        
         rate: float = kwargs.pop(ATTR_RATE, None)
         transition_time: float = kwargs.pop(ATTR_TRANSITION, None)
         brightness: float = kwargs.pop(ATTR_BRIGHTNESS, None)
@@ -136,6 +137,10 @@ class TagoLightHA(TagoEntityHA, LightEntity):
         white = kwargs.get(ATTR_WHITE)
         color_temp: int | None = kwargs.pop(ATTR_COLOR_TEMP_KELVIN, None)
         flash = kwargs.get(ATTR_FLASH)
+        
+        ## if all parametes are 'None' then this is a turn on to last brightness
+        if brightness is None and xy_color is None and white is None and color_temp is None:
+            brightness = self._last_brightness or 255
 
         if flash is not None:
             await self._entity.set_light_flash(4 if flash == FLASH_SHORT else 10)
@@ -166,6 +171,9 @@ class TagoLightHA(TagoEntityHA, LightEntity):
     async def async_turn_off(self, **kwargs):
         rate: float = kwargs.pop(ATTR_RATE, None)
         transition_time: float = kwargs.pop(ATTR_TRANSITION, None)
+        ## store current brightness level, to restore it in event of a turn on without any parameters
+        if self.brightness > 0:
+            self._last_brightness = self.brightness
         await self._entity.set_brightness(brightness=0, duration=transition_time, rate=rate)
 
     async def async_stop_transition(self):
